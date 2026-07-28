@@ -93,9 +93,10 @@ class UtilsUnitTests(TestCase):
             steps=[SimpleNamespace(id="s1", run="#tool")],
         )
 
-        with patch("cwl_loader.utils.get_args", return_value=(FakeWorkflow,)):
-            with self.assertRaises(ValueError) as ctx:
-                assert_connected_graph([workflow])
+        with patch(
+            "cwl_loader.utils.get_args", return_value=(FakeWorkflow,)
+        ), self.assertRaises(ValueError) as ctx:
+            assert_connected_graph([workflow])
 
         self.assertIn("wf.steps.s1 = #tool", str(ctx.exception))
 

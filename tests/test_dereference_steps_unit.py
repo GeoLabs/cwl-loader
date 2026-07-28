@@ -39,13 +39,12 @@ class TestDereferenceSteps(TestCase):
                 with patch(
                     "cwl_loader.load_cwl_from_location",
                     return_value=imported_process,
+                ), self.assertRaisesRegex(
+                    Exception,
+                    rf"Cannot import {process_class} already-included .*'id' already present",
                 ):
-                    with self.assertRaisesRegex(
-                        Exception,
-                        rf"Cannot import {process_class} already-included .*'id' already present",
-                    ):
-                        _dereference_steps(
-                            process=[embedding_workflow, existing_process],
-                            uri="https://example.test/main.cwl",
-                            session=SimpleNamespace(),
-                        )
+                    _dereference_steps(
+                        process=[embedding_workflow, existing_process],
+                        uri="https://example.test/main.cwl",
+                        session=SimpleNamespace(),
+                    )

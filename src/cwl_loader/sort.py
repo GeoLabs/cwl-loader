@@ -15,19 +15,24 @@
 # This workflow will install Python dependencies, run tests and lint with a single version of Python
 # For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-python
 
-from typing import Iterable, List, Mapping, Set, Tuple
+from __future__ import annotations
 
-from cwl_utils.parser import Process, Workflow
+from typing import TYPE_CHECKING, Iterable, Mapping
 
 from .utils import to_index
+
+if TYPE_CHECKING:
+    from cwl_utils.parser import Process, Workflow
 
 # ---- Utilities --------------------------------------------------------------
 
 
-def _kahn_toposort(nodes: Iterable[str], edges: Iterable[Tuple[str, str]]) -> List[str]:
+def _kahn_toposort(
+    nodes: Iterable[str], edges: Iterable[tuple[str, str]]
+) -> list[str]:
     """Return a topo-sorted list of node ids. Raises ValueError on cycles."""
     nodes = set(nodes)
-    succ: Mapping[str, Set[str]] = {n: set() for n in nodes}
+    succ: Mapping[str, set[str]] = {n: set() for n in nodes}
     pred_count: dict[str, int] = dict.fromkeys(nodes, 0)
     for a, b in edges:
         if a not in nodes or b not in nodes:
@@ -38,7 +43,7 @@ def _kahn_toposort(nodes: Iterable[str], edges: Iterable[Tuple[str, str]]) -> Li
             pred_count[b] += 1
 
     S = [n for n in nodes if pred_count[n] == 0]
-    out: List[str] = []
+    out: list[str] = []
     while S:
         n = S.pop()
         out.append(n)
@@ -57,14 +62,14 @@ def _kahn_toposort(nodes: Iterable[str], edges: Iterable[Tuple[str, str]]) -> Li
 # ---- Global $graph ordering -------------------------------------------------
 
 
-def order_graph_by_dependencies(processes: List[Process]) -> List[Process]:
+def order_graph_by_dependencies(processes: list[Process]) -> list[Process]:
     """
     Sort top-level parsed objects so that any process referenced by a Workflow step.run
     appears before the Workflow that uses it.
     """
     by_id: Mapping[str, Process] = to_index(processes)
 
-    edges: List[Tuple[str, str]] = []
+    edges: list[tuple[str, str]] = []
     for process in processes:
         # We only add edges from step.run -> workflow.id
         class_name = type(process).__name__
@@ -96,7 +101,7 @@ def _order_workflow_steps(workflow: Workflow):
     Sort steps within a Workflow so that data dependencies (in[].source) are respected.
     """
     by_id: Mapping[str, object] = to_index(workflow.steps)
-    edges: List[Tuple[str, str]] = []
+    edges: list[tuple[str, str]] = []
 
     # Add edges from producer -> consumer based on in[].source
     for step in workflow.steps:
@@ -111,14 +116,14 @@ def _order_workflow_steps(workflow: Workflow):
                 srcs = getattr(inp, "source", None)
                 if not srcs:
                     continue
-                # source can be str or List[str]
+                # source can be str or list[str]
                 if isinstance(srcs, str):
                     srcs = [srcs]
                 for s in srcs:
                     # sources are like "stepId/outputName" or "#wf/stepId/output"
                     # Extract the stepId (token before the first '/'), ignoring external ports
                     producer = s.split("/", 1)[0]
-                    if producer in by_id.keys():
+                    if producer in by_id:
                         edges.append((producer, step.id))
 
     sorted_steps = _kahn_toposort(by_id.keys(), edges)
