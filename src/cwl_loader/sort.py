@@ -15,9 +15,11 @@
 # This workflow will install Python dependencies, run tests and lint with a single version of Python
 # For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-python
 
-from .utils import to_index
+from typing import Iterable, List, Mapping, Set, Tuple
+
 from cwl_utils.parser import Process, Workflow
-from typing import Iterable, List, Mapping, Tuple, Set
+
+from .utils import to_index
 
 # ---- Utilities --------------------------------------------------------------
 
@@ -26,7 +28,7 @@ def _kahn_toposort(nodes: Iterable[str], edges: Iterable[Tuple[str, str]]) -> Li
     """Return a topo-sorted list of node ids. Raises ValueError on cycles."""
     nodes = set(nodes)
     succ: Mapping[str, Set[str]] = {n: set() for n in nodes}
-    pred_count: Mapping[str, int] = {n: 0 for n in nodes}
+    pred_count: dict[str, int] = dict.fromkeys(nodes, 0)
     for a, b in edges:
         if a not in nodes or b not in nodes:
             # Ignore edges to unknown nodes (e.g., external tools not in $graph)
@@ -72,16 +74,13 @@ def order_graph_by_dependencies(processes: List[Process]) -> List[Process]:
             workflow_id = process.id
             for step in getattr(process, "steps", []):
                 run = getattr(step, "run", None)
+                run_id: str | None
                 if isinstance(run, str):
                     run_id = run
                 else:
                     # Embedded process object
-                    run_id = (
-                        getattr(
-                            getattr(run, "__dict__", {}), "id", getattr(run, "id", "")
-                        )
-                        or None
-                    )
+                    embedded_id = getattr(run, "id", None)
+                    run_id = embedded_id if isinstance(embedded_id, str) else None
                 if run_id:
                     edges.append((run_id, workflow_id))
 

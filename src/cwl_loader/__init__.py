@@ -12,29 +12,31 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
+from collections.abc import MutableMapping as MutableMappingABC
+from copy import deepcopy
+from gzip import GzipFile
+from io import BytesIO, StringIO, TextIOWrapper
+from pathlib import Path
+from typing import Any, Mapping, TextIO
+from urllib.parse import urldefrag, urlparse
+
+import requests
+from cwl_utils.parser import Process, Workflow, load_document_by_yaml, save
+from cwlupgrader.main import upgrade_document
+from loguru import logger
+from ruamel.yaml import YAML
+from ruamel.yaml.comments import CommentedMap
+
+from .sort import order_graph_by_dependencies
 from .utils import (
-    contains_process,
     assert_connected_graph,
+    contains_process,
     get_ids,
     remove_refs,
     to_index,
 )
-from .sort import order_graph_by_dependencies
-from collections.abc import MutableMapping as MutableMappingABC
-from collections import OrderedDict
-from cwl_utils.parser import load_document_by_yaml, save
-from cwl_utils.parser import Process, Workflow
-from cwltool.load_tool import default_loader
-from cwltool.update import update
-from gzip import GzipFile
-from io import BytesIO, StringIO, TextIOWrapper
-from loguru import logger
-from ruamel.yaml import YAML
-from ruamel.yaml.comments import CommentedMap
-from typing import Any, List, Mapping, TextIO
-from urllib.parse import urlparse, urldefrag
-import requests
-import os
 
 __DEFAULT_BASE_URI__ = "io://"
 __TARGET_CWL_VERSION__ = "v1.2"
@@ -46,11 +48,52 @@ __CWL_DOCUMENT_HAS_GRAPH_ATTR__ = "_cwl_loader_document_has_graph"
 __CWL_DOCUMENT_CONTROL_FIELDS__ = ("$namespaces", "$schemas", "$base")
 
 _yaml = YAML()
-_global_loader = default_loader()
+_global_session = requests.Session()
 
 
-def _as_process_list(process: Process | List[Process]) -> List[Process]:
+def _as_process_list(process: Process | list[Process]) -> list[Process]:
     return process if isinstance(process, list) else [process]
+
+
+def _to_commented_yaml(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return CommentedMap(
+            (key, _to_commented_yaml(item)) for key, item in value.items()
+        )
+    if isinstance(value, list):
+        return [_to_commented_yaml(item) for item in value]
+    return value
+
+
+def _upgrade_output_dir(uri: str) -> str:
+    parsed_uri = urlparse(uri)
+    if parsed_uri.scheme == "file":
+        return str(Path(parsed_uri.path).parent)
+    if not parsed_uri.scheme:
+        return str(Path(uri).parent)
+    return "."
+
+
+def _upgrade_document(
+    raw_process: Mapping[str, Any] | CommentedMap,
+    cwl_version: str,
+    uri: str,
+) -> CommentedMap:
+    document = deepcopy(raw_process)
+    if not isinstance(document, CommentedMap):
+        document = _to_commented_yaml(document)
+
+    upgraded = upgrade_document(
+        document,
+        output_dir=_upgrade_output_dir(uri),
+        target_version=cwl_version,
+    )
+    if not isinstance(upgraded, CommentedMap):
+        raise ValueError(
+            f"Cannot upgrade CWL document from {raw_process[__CWL_VERSION__]} "
+            f"to {cwl_version}"
+        )
+    return upgraded
 
 
 def _extract_document_metadata(
@@ -69,7 +112,7 @@ def _extract_document_metadata(
 
 
 def _preserve_document_metadata(
-    process: Process | List[Process],
+    process: Process | list[Process],
     document_metadata: CommentedMap,
     document_has_graph: bool,
 ):
@@ -87,7 +130,7 @@ def _preserve_document_metadata(
 
 
 def _preserved_document_metadata(
-    process: Process | List[Process],
+    process: Process | list[Process],
 ) -> Mapping[str, Any] | None:
     for p in _as_process_list(process):
         metadata = getattr(p, __CWL_DOCUMENT_METADATA_ATTR__, None)
@@ -102,7 +145,7 @@ def _preserved_document_metadata(
     return None
 
 
-def _has_preserved_graph_document(process: Process | List[Process]) -> bool:
+def _has_preserved_graph_document(process: Process | list[Process]) -> bool:
     return any(
         bool(getattr(p, __CWL_DOCUMENT_HAS_GRAPH_ATTR__, False))
         for p in _as_process_list(process)
@@ -126,30 +169,20 @@ def _strip_nested_document_controls(
                 item.pop(field, None)
 
 
-def _restore_document_metadata(data: Any, process: Process | List[Process]) -> Any:
-    document_metadata = _preserved_document_metadata(process)
-
-    if not document_metadata or not isinstance(data, MutableMappingABC):
-        return data
-
+def _restore_graph_document(data: MutableMappingABC[str, Any]) -> CommentedMap:
     restored = CommentedMap()
+    graph_item = CommentedMap(
+        (key, value) for key, value in data.items() if key != __CWL_VERSION__
+    )
+    if __CWL_VERSION__ in data:
+        restored[__CWL_VERSION__] = data[__CWL_VERSION__]
+    restored[__CWL_GRAPH__] = [graph_item]
+    return restored
 
-    if _has_preserved_graph_document(process) and __CWL_GRAPH__ not in data:
-        graph_item = CommentedMap()
-        for key, value in data.items():
-            if key != __CWL_VERSION__:
-                graph_item[key] = value
 
-        if __CWL_VERSION__ in data:
-            restored[__CWL_VERSION__] = data[__CWL_VERSION__]
-
-        restored[__CWL_GRAPH__] = [graph_item]
-    else:
-        for key, value in data.items():
-            restored[key] = value
-
-    _strip_nested_document_controls(restored, document_metadata)
-
+def _merge_document_metadata(
+    restored: MutableMappingABC[str, Any], document_metadata: Mapping[str, Any]
+) -> CommentedMap:
     result = CommentedMap()
     if __CWL_VERSION__ in restored:
         result[__CWL_VERSION__] = restored[__CWL_VERSION__]
@@ -165,75 +198,104 @@ def _restore_document_metadata(data: Any, process: Process | List[Process]) -> A
     return result
 
 
+def _restore_document_metadata(data: Any, process: Process | list[Process]) -> Any:
+    document_metadata = _preserved_document_metadata(process)
+
+    if not document_metadata or not isinstance(data, MutableMappingABC):
+        return data
+
+    if _has_preserved_graph_document(process) and __CWL_GRAPH__ not in data:
+        restored = _restore_graph_document(data)
+    else:
+        restored = CommentedMap(data)
+
+    _strip_nested_document_controls(restored, document_metadata)
+    return _merge_document_metadata(restored, document_metadata)
+
+
 def _is_url(path_or_url: str, session: requests.Session) -> bool:
     try:
         result = urlparse(path_or_url)
-        return all([f"{result.scheme}://" in session.adapters.keys(), result.netloc])
+        return all([f"{result.scheme}://" in session.adapters, result.netloc])
     except Exception:
         return False
 
 
+def _select_referenced_process(
+    referenced: Process | list[Process],
+    referenced_index: Mapping[str, Process],
+    fragment: str,
+    step: Any,
+    parent: Process,
+) -> Process | list[Process]:
+    if not fragment:
+        return referenced
+    if fragment not in referenced_index:
+        raise Exception(
+            f"Step {step.id} in {parent.id} declares an illegal run {step.run} where {fragment} ID does not exist, only {get_ids(referenced)} available."
+        )
+    return referenced_index[fragment]
+
+
+def _append_referenced_process(
+    current: Process,
+    process: Process | list[Process],
+    accumulator: list[Process],
+    step: Any,
+    run_url: str,
+):
+    if contains_process(current.id, process):
+        raise Exception(
+            f"Cannot import {current.class_} {current.id} declared in {run_url}, 'id' already present in embedding CWL document"
+        )
+    accumulator.append(current)
+    step.run = f"#{current.id}"
+
+
+def _dereference_step(
+    step: Any,
+    parent: Process,
+    process: Process | list[Process],
+    accumulator: list[Process],
+    uri: str,
+    session: requests.Session,
+):
+    logger.debug(f"Checking if {step.run} must be externally imported...")
+    run_url, fragment = urldefrag(step.run)
+    logger.debug(f"run_url: {run_url} - uri: {uri}")
+
+    if not run_url or uri == run_url:
+        return
+
+    referenced: Process | list[Process] = load_cwl_from_location(
+        path=run_url, session=session
+    )
+    referenced_index = to_index(referenced) if isinstance(referenced, list) else {}
+    referenced = _select_referenced_process(
+        referenced, referenced_index, fragment, step, parent
+    )
+
+    if isinstance(referenced, list):
+        if len(referenced) != 1:
+            raise ValueError(
+                f"No entry point provided for $graph referenced by {step.run}"
+            )
+        _append_referenced_process(referenced[0], process, accumulator, step, run_url)
+        return
+
+    _append_referenced_process(referenced, process, accumulator, step, run_url)
+    if isinstance(referenced, Workflow):
+        for inner_step in getattr(referenced, "steps", []):
+            accumulator.append(referenced_index[inner_step.run.split("#")[-1]])
+
+
 def _dereference_steps(
-    process: Process | List[Process], uri: str, session: requests.Session
-) -> List[Process]:
-    def _on_process(p: Process, accumulator: List[Process]):
-        for step in getattr(p, "steps", []):
-            logger.debug(f"Checking if {step.run} must be externally imported...")
-
-            run_url, fragment = urldefrag(step.run)
-
-            logger.debug(f"run_url: {run_url} - uri: {uri}")
-
-            if run_url and not uri == run_url:
-                referenced: Process | List[Process] = load_cwl_from_location(
-                    path=run_url, session=session
-                )
-
-                if isinstance(referenced, list):
-                    referenced_index: Mapping[str, Process] = to_index(referenced)
-                else:
-                    referenced_index: Mapping[str, Process] = {}
-
-                if fragment:
-                    if fragment not in referenced_index:
-                        raise Exception(
-                            f"Step {step.id} in {p.id} declares an illegal run {step.run} where {fragment} ID does not exist, only {get_ids(referenced)} available."
-                        )
-
-                    referenced = referenced_index[fragment]
-
-                def _append_process(current: Process):
-                    if contains_process(current.id, process):
-                        raise Exception(
-                            f"Cannot import {current.class_} {current.id} declared in {run_url}, 'id' already present in embedding CWL document"
-                        )
-
-                    accumulator.append(current)
-                    step.run = f"#{current.id}"
-
-                if isinstance(referenced, list):
-                    if 1 == len(referenced):
-                        _append_process(referenced[0])
-                    else:
-                        raise ValueError(
-                            f"No entry point provided for $graph referenced by {step.run}"
-                        )
-                else:
-                    _append_process(referenced)
-
-                    if isinstance(referenced, Workflow):
-                        for inner_step in getattr(referenced, "steps", []):
-                            accumulator.append(
-                                referenced_index[inner_step.run.split("#")[-1]]
-                            )
-
-    result: List[Process] = process if isinstance(process, list) else [process]
-
-    if isinstance(process, list):
-        for p in process:
-            _on_process(p, result)
-    else:
-        _on_process(process, result)
+    process: Process | list[Process], uri: str, session: requests.Session
+) -> list[Process]:
+    result = _as_process_list(process)
+    for parent in _as_process_list(process):
+        for step in getattr(parent, "steps", []):
+            _dereference_step(step, parent, process, result, uri, session)
 
     return result
 
@@ -243,8 +305,8 @@ def load_cwl_from_yaml(
     uri: str = __DEFAULT_BASE_URI__,
     cwl_version: str = __TARGET_CWL_VERSION__,
     sort: bool = True,
-    session: requests.Session = requests.Session(),
-) -> Process | List[Process]:
+    session: requests.Session = _global_session,
+) -> Process | list[Process]:
     """
     Loads a CWL document from a raw dictionary.
 
@@ -265,15 +327,10 @@ def load_cwl_from_yaml(
             f"Updating the model from version '{raw_process[__CWL_VERSION__]}' to version '{cwl_version}'..."
         )
 
-        updated_process = update(
-            doc=raw_process
-            if isinstance(raw_process, CommentedMap)
-            else CommentedMap(OrderedDict(raw_process)),
-            loader=_global_loader,
-            baseuri=uri,
-            enable_dev=False,
-            metadata=CommentedMap(OrderedDict({"cwlVersion": cwl_version})),
-            update_to=cwl_version,
+        updated_process = _upgrade_document(
+            raw_process=raw_process,
+            cwl_version=cwl_version,
+            uri=uri,
         )
 
         logger.debug(f"Raw CWL document successfully updated to {cwl_version}!")
@@ -332,8 +389,8 @@ def load_cwl_from_stream(
     uri: str = __DEFAULT_BASE_URI__,
     cwl_version: str = __TARGET_CWL_VERSION__,
     sort: bool = True,
-    session: requests.Session = requests.Session(),
-) -> Process | List[Process]:
+    session: requests.Session = _global_session,
+) -> Process | list[Process]:
     """
     Loads a CWL document from a stream of data.
 
@@ -364,8 +421,8 @@ def load_cwl_from_location(
     path: str,
     cwl_version: str = __TARGET_CWL_VERSION__,
     sort: bool = True,
-    session: requests.Session = requests.Session(),
-) -> Process | List[Process]:
+    session: requests.Session = _global_session,
+) -> Process | list[Process]:
     """
     Loads a CWL document from a URL or a file on the local File System, automatically detected.
 
@@ -403,16 +460,14 @@ def load_cwl_from_location(
         remaining = response.raw.read()  # Read rest of the stream
         combined = BytesIO(magic + remaining)
 
-        if b"\x1f\x8b" == magic:
-            buffer = GzipFile(fileobj=combined)
-        else:
-            buffer = combined
+        buffer = GzipFile(fileobj=combined) if magic == b"\x1f\x8b" else combined
 
         return _load_cwl_from_stream(
             TextIOWrapper(buffer, encoding=__DEFAULT_ENCODING__)
         )
-    elif os.path.exists(path):
-        with open(path, "r", encoding=__DEFAULT_ENCODING__) as f:
+    source_path = Path(path)
+    if source_path.exists():
+        with source_path.open(encoding=__DEFAULT_ENCODING__) as f:
             return _load_cwl_from_stream(f)
     else:
         raise ValueError(f"Invalid source {path}: not a URL or existing file path")
@@ -423,7 +478,7 @@ def load_cwl_from_string_content(
     uri: str = __DEFAULT_BASE_URI__,
     cwl_version: str = __TARGET_CWL_VERSION__,
     sort: bool = True,
-) -> Process | List[Process]:
+) -> Process | list[Process]:
     """
     Loads a CWL document from its textual representation.
 
@@ -440,7 +495,7 @@ def load_cwl_from_string_content(
     )
 
 
-def dump_cwl(process: Process | List[Process], stream: TextIO):
+def dump_cwl(process: Process | list[Process], stream: TextIO):
     """
     Serializes a CWL document to its YAML representation.
 

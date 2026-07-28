@@ -12,15 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from typing import List, Mapping, Optional, TypeVar, get_args
+
 from cwl_utils.parser import Process, Workflow
-from cwltool.update import ORIGINAL_CWLVERSION
-from typing import get_args, List, Mapping, Optional, TypeVar
 
 T = TypeVar("T")
+ORIGINAL_CWLVERSION = "http://commonwl.org/cwltool#original_cwlVersion"
 
 
 def to_index(collection: List[T]) -> Mapping[str, T]:
-    result: Mapping[str, T] = {}
+    result: dict[str, T] = {}
 
     for item in collection:
         id = getattr(item, "id", None)
@@ -37,8 +38,8 @@ def search_process(process_id: str, process: Process | List[Process]) -> Process
                 return wf
     elif process_id == process.id:
         return process
-    else:
-        return None
+
+    return None
 
 
 def contains_process(process_id: str, process: Process | List[Process]) -> bool:
