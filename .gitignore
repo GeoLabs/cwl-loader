@@ -6,3 +6,7 @@ __pycache__
 .task
 .venv
 docs/api
+.vscode
+.ruff_cache
+.codex
+.agents

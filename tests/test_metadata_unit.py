@@ -1,7 +1,7 @@
+import sys
 from io import StringIO
 from pathlib import Path
 from unittest import TestCase
-import sys
 
 from ruamel.yaml import YAML
 
@@ -89,3 +89,21 @@ class MetadataPreservationTests(TestCase):
         self.assertEqual({"owner": "team"}, dumped["metadata"])
         self.assertIn("$graph", dumped)
         self.assertEqual("tool", dumped["$graph"][0]["id"])
+
+    def test_v1_1_document_is_upgraded_without_mutating_input(self):
+        raw_process = {
+            "cwlVersion": "v1.1",
+            "class": "CommandLineTool",
+            "id": "tool",
+            "baseCommand": "echo",
+            "inputs": [],
+            "outputs": [],
+        }
+
+        process = load_cwl_from_yaml(raw_process, sort=False)
+        stream = StringIO()
+        dump_cwl(process, stream)
+        dumped = self.yaml.load(stream.getvalue())
+
+        self.assertEqual("v1.1", raw_process["cwlVersion"])
+        self.assertEqual("v1.2", dumped["cwlVersion"])

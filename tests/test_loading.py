@@ -15,8 +15,9 @@
 # This workflow will install Python dependencies, run tests and lint with a single version of Python
 # For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-python
 
-from cwl_loader import load_cwl_from_location
 from unittest import TestCase
+
+from cwl_loader import load_cwl_from_location
 
 
 class Testloading(TestCase):
