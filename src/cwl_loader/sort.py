@@ -17,19 +17,19 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Iterable, Mapping
+from typing import TYPE_CHECKING
 
 from .utils import to_index
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable, Mapping
+
     from cwl_utils.parser import Process, Workflow
 
 # ---- Utilities --------------------------------------------------------------
 
 
-def _kahn_toposort(
-    nodes: Iterable[str], edges: Iterable[tuple[str, str]]
-) -> list[str]:
+def _kahn_toposort(nodes: Iterable[str], edges: Iterable[tuple[str, str]]) -> list[str]:
     """Return a topo-sorted list of node ids. Raises ValueError on cycles."""
     nodes = set(nodes)
     succ: Mapping[str, set[str]] = {n: set() for n in nodes}

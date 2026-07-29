@@ -14,12 +14,48 @@
 
 from types import SimpleNamespace
 from unittest import TestCase
-from unittest.mock import patch
+from unittest.mock import Mock
 
-from cwl_loader import _dereference_steps
+from cwl_loader._dereference import _dereference_steps, remove_refs
 
 
 class TestDereferenceSteps(TestCase):
+    def test_remove_refs_normalizes_ids_sources_and_extension_fields(self):
+        step = SimpleNamespace(
+            id="workflow/stepA",
+            in_=[
+                SimpleNamespace(id="workflow/stepA/in", source="#workflow/producer/out")
+            ],
+            out=["workflow/stepA/out"],
+            run="#workflow/toolA",
+            scatter=["#workflow/producer/out"],
+        )
+        workflow = SimpleNamespace(
+            id="#workflow",
+            inputs=[SimpleNamespace(id="workflow/in")],
+            outputs=[
+                SimpleNamespace(id="workflow/out", outputSource="#workflow/stepA/out")
+            ],
+            steps=[step],
+            extension_fields={
+                "http://commonwl.org/cwltool#original_cwlVersion": "v1.0"
+            },
+        )
+
+        remove_refs([workflow])
+
+        self.assertEqual("workflow", workflow.id)
+        self.assertEqual("in", workflow.inputs[0].id)
+        self.assertEqual("out", workflow.outputs[0].id)
+        self.assertEqual("stepA/out", workflow.outputs[0].outputSource)
+        self.assertEqual("stepA", step.id)
+        self.assertEqual("in", step.in_[0].id)
+        self.assertEqual("producer/out", step.in_[0].source)
+        self.assertEqual(["out"], step.out)
+        self.assertEqual("#workflow/toolA", step.run)
+        self.assertEqual(["producer/out"], step.scatter)
+        self.assertEqual({}, workflow.extension_fields)
+
     def test_external_process_with_existing_id_raises_exception(self):
         external_url = "https://example.test/external.cwl"
 
@@ -36,10 +72,7 @@ class TestDereferenceSteps(TestCase):
                     id="already-included", class_=process_class, steps=[]
                 )
 
-                with patch(
-                    "cwl_loader.load_cwl_from_location",
-                    return_value=imported_process,
-                ), self.assertRaisesRegex(
+                with self.assertRaisesRegex(
                     Exception,
                     rf"Cannot import {process_class} already-included .*'id' already present",
                 ):
@@ -47,4 +80,5 @@ class TestDereferenceSteps(TestCase):
                         process=[embedding_workflow, existing_process],
                         uri="https://example.test/main.cwl",
                         session=SimpleNamespace(),
+                        loader=Mock(return_value=imported_process),
                     )

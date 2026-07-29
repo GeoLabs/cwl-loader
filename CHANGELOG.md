@@ -23,6 +23,22 @@ local release tag.
 
 ### Security
 
+## [0.24.0] - 2026-07-29
+
+### Deprecated
+
+- Python `3.8` and `3.9` no longer supported.
+
+### Changed
+
+- Soc: all dereferencing operations moved to a proper dedicated module.
+
+### Fixed
+
+- Avoid `cwlupgrader.process_imports` that wrongly assumes `$import` staments in `SchemaDefRequirement` are CWLs.
+- Prevents expetion raising when `{Process}.outputs.{id}.outputSource` is `None`
+- `mypy` and `ruff` checks.
+
 ## [0.23.0] - 2026-07-28
 
 ### Changed

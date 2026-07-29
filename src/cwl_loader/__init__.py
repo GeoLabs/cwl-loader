@@ -14,29 +14,24 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from collections.abc import MutableMapping as MutableMappingABC
-from copy import deepcopy
 from gzip import GzipFile
 from io import BytesIO, StringIO, TextIOWrapper
 from pathlib import Path
-from typing import Any, Mapping, TextIO
+from typing import Any, TextIO
 from urllib.parse import urldefrag, urlparse
 
 import requests
-from cwl_utils.parser import Process, Workflow, load_document_by_yaml, save
-from cwlupgrader.main import upgrade_document
+from cwl_utils.parser import Process, load_document_by_yaml, save
 from loguru import logger
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap
 
+from ._cwlupgrader import _upgrade_document
+from ._dereference import _dereference_steps, remove_refs
 from .sort import order_graph_by_dependencies
-from .utils import (
-    assert_connected_graph,
-    contains_process,
-    get_ids,
-    remove_refs,
-    to_index,
-)
+from .utils import assert_connected_graph
 
 __DEFAULT_BASE_URI__ = "io://"
 __TARGET_CWL_VERSION__ = "v1.2"
@@ -53,47 +48,6 @@ _global_session = requests.Session()
 
 def _as_process_list(process: Process | list[Process]) -> list[Process]:
     return process if isinstance(process, list) else [process]
-
-
-def _to_commented_yaml(value: Any) -> Any:
-    if isinstance(value, Mapping):
-        return CommentedMap(
-            (key, _to_commented_yaml(item)) for key, item in value.items()
-        )
-    if isinstance(value, list):
-        return [_to_commented_yaml(item) for item in value]
-    return value
-
-
-def _upgrade_output_dir(uri: str) -> str:
-    parsed_uri = urlparse(uri)
-    if parsed_uri.scheme == "file":
-        return str(Path(parsed_uri.path).parent)
-    if not parsed_uri.scheme:
-        return str(Path(uri).parent)
-    return "."
-
-
-def _upgrade_document(
-    raw_process: Mapping[str, Any] | CommentedMap,
-    cwl_version: str,
-    uri: str,
-) -> CommentedMap:
-    document = deepcopy(raw_process)
-    if not isinstance(document, CommentedMap):
-        document = _to_commented_yaml(document)
-
-    upgraded = upgrade_document(
-        document,
-        output_dir=_upgrade_output_dir(uri),
-        target_version=cwl_version,
-    )
-    if not isinstance(upgraded, CommentedMap):
-        raise ValueError(
-            f"Cannot upgrade CWL document from {raw_process[__CWL_VERSION__]} "
-            f"to {cwl_version}"
-        )
-    return upgraded
 
 
 def _extract_document_metadata(
@@ -221,85 +175,6 @@ def _is_url(path_or_url: str, session: requests.Session) -> bool:
         return False
 
 
-def _select_referenced_process(
-    referenced: Process | list[Process],
-    referenced_index: Mapping[str, Process],
-    fragment: str,
-    step: Any,
-    parent: Process,
-) -> Process | list[Process]:
-    if not fragment:
-        return referenced
-    if fragment not in referenced_index:
-        raise Exception(
-            f"Step {step.id} in {parent.id} declares an illegal run {step.run} where {fragment} ID does not exist, only {get_ids(referenced)} available."
-        )
-    return referenced_index[fragment]
-
-
-def _append_referenced_process(
-    current: Process,
-    process: Process | list[Process],
-    accumulator: list[Process],
-    step: Any,
-    run_url: str,
-):
-    if contains_process(current.id, process):
-        raise Exception(
-            f"Cannot import {current.class_} {current.id} declared in {run_url}, 'id' already present in embedding CWL document"
-        )
-    accumulator.append(current)
-    step.run = f"#{current.id}"
-
-
-def _dereference_step(
-    step: Any,
-    parent: Process,
-    process: Process | list[Process],
-    accumulator: list[Process],
-    uri: str,
-    session: requests.Session,
-):
-    logger.debug(f"Checking if {step.run} must be externally imported...")
-    run_url, fragment = urldefrag(step.run)
-    logger.debug(f"run_url: {run_url} - uri: {uri}")
-
-    if not run_url or uri == run_url:
-        return
-
-    referenced: Process | list[Process] = load_cwl_from_location(
-        path=run_url, session=session
-    )
-    referenced_index = to_index(referenced) if isinstance(referenced, list) else {}
-    referenced = _select_referenced_process(
-        referenced, referenced_index, fragment, step, parent
-    )
-
-    if isinstance(referenced, list):
-        if len(referenced) != 1:
-            raise ValueError(
-                f"No entry point provided for $graph referenced by {step.run}"
-            )
-        _append_referenced_process(referenced[0], process, accumulator, step, run_url)
-        return
-
-    _append_referenced_process(referenced, process, accumulator, step, run_url)
-    if isinstance(referenced, Workflow):
-        for inner_step in getattr(referenced, "steps", []):
-            accumulator.append(referenced_index[inner_step.run.split("#")[-1]])
-
-
-def _dereference_steps(
-    process: Process | list[Process], uri: str, session: requests.Session
-) -> list[Process]:
-    result = _as_process_list(process)
-    for parent in _as_process_list(process):
-        for step in getattr(parent, "steps", []):
-            _dereference_step(step, parent, process, result, uri, session)
-
-    return result
-
-
 def load_cwl_from_yaml(
     raw_process: Mapping[str, Any] | CommentedMap,
     uri: str = __DEFAULT_BASE_URI__,
@@ -352,7 +227,12 @@ def load_cwl_from_yaml(
 
     logger.debug("Dereferencing the steps[].run...")
 
-    dereferenced_process = _dereference_steps(process=process, uri=uri, session=session)
+    dereferenced_process = _dereference_steps(
+        process=process,
+        uri=uri,
+        session=session,
+        loader=load_cwl_from_location,
+    )
 
     logger.debug("steps[].run successfully dereferenced! Dereferencing the FQNs...")
 
