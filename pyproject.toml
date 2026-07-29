@@ -41,13 +41,6 @@ Source = "https://github.com/eoap/cwl-loader"
 [tool.hatch.version]
 path = "src/cwl_loader/__about__.py"
 
-[tool.hatch.envs.types]
-extra-dependencies = [
-  "mypy>=1.0.0",
-]
-[tool.hatch.envs.types.scripts]
-check = "mypy --install-types --non-interactive {args:src/cwl_loader tests}"
-
 [tool.coverage.run]
 source_pkgs = ["cwl_loader", "tests"]
 branch = true
