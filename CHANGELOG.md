@@ -23,6 +23,22 @@ local release tag.
 
 ### Security
 
+## [0.24.0] - 2026-07-29
+
+### Deprecated
+
+- Python `3.8` and `3.9` no longer supported.
+
+### Changed
+
+- Soc: all dereferencing operations moved to a proper dedicated module.
+
+### Fixed
+
+- Avoid `cwlupgrader.process_imports` that wrongly assumes `$import` staments in `SchemaDefRequirement` are CWLs.
+- Prevents expetion raising when `{Process}.outputs.{id}.outputSource` is `None`
+- `mypy` and `ruff` checks.
+
 ## [0.23.0] - 2026-07-28
 
 ### Changed
@@ -138,7 +154,8 @@ local release tag.
 - Fix the `dump_cwl` method signature and documentation/notebook build issues.
 - Correct project naming, license content, formatting, tests, and CI setup.
 
-[Unreleased]: https://github.com/Terradue/cwl-loader/compare/v0.23.0...HEAD
+[Unreleased]: https://github.com/Terradue/cwl-loader/compare/v0.24.0...HEAD
+[0.24.0]: https://github.com/Terradue/cwl-loader/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/Terradue/cwl-loader/compare/v0.22.0...v0.23.0
 [0.22.0]: https://github.com/Terradue/cwl-loader/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/Terradue/cwl-loader/compare/v0.20.0...v0.21.0

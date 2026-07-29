@@ -23,6 +23,7 @@ from cwl_loader import load_cwl_from_location
 class Testloading(TestCase):
     def setUp(self):
         self.wf_url = "https://raw.githubusercontent.com/eoap/application-package-patterns/refs/heads/main/cwl-workflow/pattern-1.cwl"
+        self.stage_in_url = "https://raw.githubusercontent.com/eoap/application-package-patterns/refs/heads/main/templates/stage-in.cwl"
 
     def tearDown(self):
         pass
@@ -33,3 +34,8 @@ class Testloading(TestCase):
         self.assertIsInstance(
             graph, list, f"Expecting graph as list, found {type(graph)}"
         )
+
+    def test_remote_schema_definition_import(self):
+        process = load_cwl_from_location(path=self.stage_in_url)
+
+        self.assertIsNotNone(process)

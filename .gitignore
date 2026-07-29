@@ -10,3 +10,4 @@ docs/api
 .ruff_cache
 .codex
 .agents
+uv.lock
