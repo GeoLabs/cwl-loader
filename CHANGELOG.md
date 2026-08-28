@@ -25,6 +25,11 @@ local release tag.
 
 ## [0.25.0] - 2026-08-28
 
+### Changed
+
+- `cwl-utils` bumped to v`0.43`.
+- removed direct `ruamel.yaml` dependency, inheriting `cwl-utils` one.
+
 ### Fixed
 
 - extracts and preserves document-level metadata on single-process documents.

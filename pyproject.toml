@@ -27,9 +27,8 @@ classifiers = [
   "Programming Language :: Python :: Implementation :: PyPy",
 ]
 dependencies = [
-  "cwl-utils==0.42",
+  "cwl-utils==0.43",
   "cwl-upgrader==1.2.15",
-  "ruamel.yaml >= 0.17.6, < 0.20", # cwl-utils 0.42 depends on ruamel.yaml<0.20 and >=0.17.6
   "loguru==0.7.3",
 ]
 
