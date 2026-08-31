@@ -23,6 +23,17 @@ local release tag.
 
 ### Security
 
+## [0.25.0] - 2026-08-28
+
+### Changed
+
+- `cwl-utils` bumped to v`0.43`.
+- removed direct `ruamel.yaml` dependency, inheriting `cwl-utils` one.
+
+### Fixed
+
+- extracts and preserves document-level metadata on single-process documents.
+
 ## [0.24.0] - 2026-07-29
 
 ### Deprecated
@@ -154,7 +165,8 @@ local release tag.
 - Fix the `dump_cwl` method signature and documentation/notebook build issues.
 - Correct project naming, license content, formatting, tests, and CI setup.
 
-[Unreleased]: https://github.com/Terradue/cwl-loader/compare/v0.24.0...HEAD
+[Unreleased]: https://github.com/Terradue/cwl-loader/compare/v0.25.0...HEAD
+[0.25.0]: https://github.com/Terradue/cwl-loader/compare/v0.24.0...v0.25.0
 [0.24.0]: https://github.com/Terradue/cwl-loader/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/Terradue/cwl-loader/compare/v0.22.0...v0.23.0
 [0.22.0]: https://github.com/Terradue/cwl-loader/compare/v0.21.0...v0.22.0

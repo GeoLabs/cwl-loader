@@ -21,7 +21,7 @@ tasks:
 
   default:
     cmds:
-    - task: quality:test
+    - task: quality:pre-commit:run
 
   publish:cwl-oci:
     desc: Publish CommandLineTool CWL files as OCI artifacts to GHCR

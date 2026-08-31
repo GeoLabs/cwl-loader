@@ -52,14 +52,17 @@ def _as_process_list(process: Process | list[Process]) -> list[Process]:
 
 def _extract_document_metadata(
     raw_process: Mapping[str, Any] | CommentedMap,
+    process: Process | list[Process] | None = None,
 ) -> CommentedMap:
     metadata = CommentedMap()
 
-    if __CWL_GRAPH__ not in raw_process:
-        return metadata
+    process_fields: set[str] = set()
+    if __CWL_GRAPH__ not in raw_process and process is not None:
+        for p in _as_process_list(process):
+            process_fields.update(getattr(p, "attrs", ()))
 
     for key, value in raw_process.items():
-        if key not in (__CWL_VERSION__, __CWL_GRAPH__):
+        if key not in (__CWL_VERSION__, __CWL_GRAPH__) and key not in process_fields:
             metadata[key] = value
 
     return metadata
@@ -123,6 +126,50 @@ def _strip_nested_document_controls(
                 item.pop(field, None)
 
 
+def _serialized_extension_metadata_keys(
+    process: Process | list[Process], document_metadata: Mapping[str, Any]
+) -> set[str]:
+    """Return serialized extension keys that duplicate preserved source keys."""
+    serialized_keys: set[str] = set()
+
+    for p in _as_process_list(process):
+        extension_fields = getattr(p, "extension_fields", {})
+        loading_options = getattr(p, "loadingOptions", None)
+        namespaces = getattr(loading_options, "namespaces", {})
+
+        for key in document_metadata:
+            if key.startswith("$"):
+                continue
+
+            expanded_key = key
+            if ":" in key and not key.startswith(("http://", "https://")):
+                prefix, local_name = key.split(":", 1)
+                if prefix in namespaces:
+                    expanded_key = f"{namespaces[prefix]}{local_name}"
+
+            if expanded_key in extension_fields:
+                serialized_keys.add(expanded_key)
+
+    return serialized_keys
+
+
+def _strip_serialized_extension_metadata(
+    data: MutableMappingABC[str, Any],
+    process: Process | list[Process],
+    document_metadata: Mapping[str, Any],
+):
+    keys = _serialized_extension_metadata_keys(process, document_metadata)
+    if not keys:
+        return
+
+    graph = data.get(__CWL_GRAPH__)
+    targets = graph if isinstance(graph, list) else [data]
+    for target in targets:
+        if isinstance(target, MutableMappingABC):
+            for key in keys:
+                target.pop(key, None)
+
+
 def _restore_graph_document(data: MutableMappingABC[str, Any]) -> CommentedMap:
     restored = CommentedMap()
     graph_item = CommentedMap(
@@ -164,6 +211,8 @@ def _restore_document_metadata(data: Any, process: Process | list[Process]) -> A
         restored = CommentedMap(data)
 
     _strip_nested_document_controls(restored, document_metadata)
+    if not _has_preserved_graph_document(process):
+        _strip_serialized_extension_metadata(restored, process, document_metadata)
     return _merge_document_metadata(restored, document_metadata)
 
 
@@ -194,7 +243,6 @@ def load_cwl_from_yaml(
         `Processes`: The parsed CWL Process or Processes (if the CWL document is a `$graph`).
     """
     updated_process = raw_process
-    document_metadata = _extract_document_metadata(raw_process)
     document_has_graph = __CWL_GRAPH__ in raw_process
 
     if cwl_version != raw_process[__CWL_VERSION__]:
@@ -251,6 +299,9 @@ def load_cwl_from_yaml(
         dereferenced_process = order_graph_by_dependencies(dereferenced_process)
         logger.debug("Sorting process is over.")
 
+    document_metadata = _extract_document_metadata(
+        raw_process, process=dereferenced_process
+    )
     _preserve_document_metadata(
         process=dereferenced_process,
         document_metadata=document_metadata,
