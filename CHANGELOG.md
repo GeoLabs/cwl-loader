@@ -23,6 +23,22 @@ local release tag.
 
 ### Security
 
+## [0.26.0] - 2026-09-21
+
+### Fixed
+
+- Load inline `steps[].run` process definitions without treating DOM objects as URLs.
+  Inline tools and nested workflows are included in the returned process index;
+  anonymous inline processes receive IDs derived from their containing step.
+- Accept local `file:///...` and `file://localhost/...` sources, including
+  percent-encoded paths, and preserve file URI bases for relative references.
+- Normalize local filesystem paths to absolute file URIs before parsing.
+
+### Added
+
+- Regression tests for inline runs, nested workflows, local file URIs, relative
+  references, duplicate inline IDs, and unsupported file URI authorities.
+
 ## [0.25.0] - 2026-08-28
 
 ### Changed
@@ -165,7 +181,8 @@ local release tag.
 - Fix the `dump_cwl` method signature and documentation/notebook build issues.
 - Correct project naming, license content, formatting, tests, and CI setup.
 
-[Unreleased]: https://github.com/Terradue/cwl-loader/compare/v0.25.0...HEAD
+[Unreleased]: https://github.com/transpiler-mate/cwl-loader/compare/v0.26.0...HEAD
+[0.26.0]: https://github.com/transpiler-mate/cwl-loader/compare/v0.25.0...v0.26.0
 [0.25.0]: https://github.com/Terradue/cwl-loader/compare/v0.24.0...v0.25.0
 [0.24.0]: https://github.com/Terradue/cwl-loader/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/Terradue/cwl-loader/compare/v0.22.0...v0.23.0
