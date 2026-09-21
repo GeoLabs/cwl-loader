@@ -167,19 +167,69 @@ def _dereference_step(
             accumulator.append(referenced_index[inner_step.run.split("#")[-1]])
 
 
+def _rebase_inline_references(process: Process, old: str, new: str) -> None:
+    """Rebase anonymous process IDs and their local wiring before cleanup."""
+
+    def rebase(value):
+        if isinstance(value, list):
+            return [rebase(item) for item in value]
+        if isinstance(value, str) and (value == old or value.startswith(f"{old}/")):
+            return new + value[len(old) :]
+        return value
+
+    process.id = new
+    for parameter in [*process.inputs, *process.outputs]:
+        parameter.id = rebase(parameter.id)
+        if hasattr(parameter, "outputSource"):
+            parameter.outputSource = rebase(parameter.outputSource)
+    for step in getattr(process, "steps", []):
+        step.id = rebase(step.id)
+        for item in step.in_:
+            item.id = rebase(item.id)
+            item.source = rebase(item.source)
+        step.out = rebase(step.out)
+        step.scatter = rebase(step.scatter)
+        if isinstance(step.run, str):
+            step.run = rebase(step.run)
+
+
+def _lift_inline_processes(processes: list[Process], uri: str) -> None:
+    """Index inline runs (including nested workflows) before dereferencing URLs."""
+    index = {p.id: p for p in processes}
+    # Appending while iterating also visits newly lifted inline workflows.
+    for parent in processes:
+        for step in getattr(parent, "steps", []):
+            if isinstance(step.run, str):
+                continue
+            embedded = step.run
+            if embedded.id.startswith("_:"):
+                fragment = step.id.split("#")[-1]
+                identifier = f"{urldefrag(uri)[0]}#{fragment}/run"
+                _rebase_inline_references(embedded, embedded.id, identifier)
+            existing = index.get(embedded.id)
+            if existing is not None and existing is not embedded:
+                raise ValueError(f"Duplicate inline process identifier: {embedded.id}")
+            if existing is None:
+                index[embedded.id] = embedded
+                processes.append(embedded)
+            # An indexed inline process must not be fetched as an external URL.
+            step.run = f"#{embedded.id.split('#')[-1]}"
+
+
 def _dereference_steps(
     process: Process | list[Process],
     uri: str,
     session: requests.Session,
     loader: CwlLoader,
 ) -> list[Process]:
-    result = _as_process_list(process)
-    for parent in _as_process_list(process):
+    result = list(_as_process_list(process))
+    _lift_inline_processes(result, uri)
+    for parent in result:
         for step in getattr(parent, "steps", []):
             _dereference_step(
                 step,
                 parent,
-                process,
+                result,
                 result,
                 uri,
                 session,

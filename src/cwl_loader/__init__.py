@@ -21,6 +21,7 @@ from io import BytesIO, StringIO, TextIOWrapper
 from pathlib import Path
 from typing import Any, TextIO
 from urllib.parse import urldefrag, urlparse
+from urllib.request import url2pathname
 
 import requests
 from cwl_utils.parser import Process, load_document_by_yaml, save
@@ -355,7 +356,12 @@ def load_cwl_from_location(
     session: requests.Session = _global_session,
 ) -> Process | list[Process]:
     """
-    Loads a CWL document from a URL or a file on the local File System, automatically detected.
+    Loads a CWL document from an HTTP(S) URL, local path, or local file URI.
+
+    Local file URIs may use an empty authority or localhost. Percent-encoded
+    paths are decoded before opening; relative references use the file URI.
+    As for other sources, URI fragments do not select a process: the complete
+    document is loaded.
 
     Args:
         `path` (`str`): The URL or a file on the local File System where reading the CWL document
@@ -367,12 +373,31 @@ def load_cwl_from_location(
     """
     logger.debug(f"Loading CWL document from {path}...")
 
+    document_uri = path
+    parsed = urlparse(path)
+    source_path = None
+    if parsed.scheme == "file":
+        if parsed.netloc.lower() not in ("", "localhost"):
+            raise ValueError(
+                f"Non-local file URI authority is not supported: {parsed.netloc}"
+            )
+        if parsed.query:
+            raise ValueError(f"File URI queries are not supported: {path}")
+        source_path = Path(url2pathname(parsed.path))
+        if not source_path.is_absolute():
+            raise ValueError(f"File URI must contain an absolute path: {path}")
+    elif not _is_url(path, session):
+        source_path = Path(path)
+
+    if source_path is not None:
+        document_uri = source_path.resolve().as_uri()
+
     def _load_cwl_from_stream(stream):
         logger.debug(f"Reading stream from {path}...")
 
         loaded = load_cwl_from_stream(
             content=stream,
-            uri=path,
+            uri=document_uri,
             cwl_version=cwl_version,
             sort=sort,
             session=session,
@@ -382,7 +407,7 @@ def load_cwl_from_location(
 
         return loaded
 
-    if _is_url(path, session):
+    if source_path is None:
         response = session.get(path, stream=True)
         response.raise_for_status()
 
@@ -396,8 +421,7 @@ def load_cwl_from_location(
         return _load_cwl_from_stream(
             TextIOWrapper(buffer, encoding=__DEFAULT_ENCODING__)
         )
-    source_path = Path(path)
-    if source_path.exists():
+    if source_path.is_file():
         with source_path.open(encoding=__DEFAULT_ENCODING__) as f:
             return _load_cwl_from_stream(f)
     else:
