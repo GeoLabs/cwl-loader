@@ -27,6 +27,7 @@ from ruamel.yaml.comments import CommentedMap
 from typing import Any, List, Mapping, Optional, TextIO, Tuple
 from urllib.parse import urlparse, urldefrag
 import copy
+import json
 import requests
 import os
 
@@ -599,6 +600,32 @@ def _deduplicate_blank_named_nodes(data: dict) -> None:
     visit(data)
 
 
+def _ensure_default_base_namespace_declared(data: dict) -> None:
+    """
+    Processes loaded via `load_cwl_from_yaml`/`load_cwl_from_location`/etc.
+    without an explicit `uri=` default to `__DEFAULT_BASE_URI__` ("io://")
+    as their base. Any anonymous/synthesized id schema-salad mints while
+    parsing that document inherits it - observed as either "io://#..." or,
+    for ids built by joining a relative path onto the empty-authority base
+    (e.g. a nested step/port path), the single-slash "io:/#water-bodies/
+    stac_items/_:<uuid>" form. Either way, nothing in the dumped output
+    ever *declares* what the `io` prefix means, so cwltool warns "URI
+    prefix 'io' ... not recognized, are you missing a $namespaces
+    section?" on every such id when later loading the dumped document.
+
+    Declares it once in *data*'s `$namespaces`, matching whichever exact
+    form was found, unless something already assigns `io` to a different
+    value (a document's own, unrelated `io` namespace is left untouched
+    rather than risk clobbering it).
+    """
+    text = json.dumps(data)
+    for candidate in (__DEFAULT_BASE_URI__, "io:/"):
+        if candidate in text:
+            namespaces = data.setdefault("$namespaces", {})
+            namespaces.setdefault("io", candidate)
+            return
+
+
 def dump_cwl(process: Process | List[Process], stream: TextIO):
     """
     Serializes a CWL document to its YAML representation.
@@ -617,6 +644,7 @@ def dump_cwl(process: Process | List[Process], stream: TextIO):
 
     _deduplicate_schema_def_requirements(data)
     _deduplicate_blank_named_nodes(data)
+    _ensure_default_base_namespace_declared(data)
 
     _yaml.dump(data=data, stream=stream)
 
@@ -688,6 +716,10 @@ def dump_cwl_with_custom_requirements(
     if "__root__" in original_namespaces:
         data["$namespaces"] = original_namespaces["__root__"]
         logger.debug(f"Restored original $namespaces: {data['$namespaces']}")
+
+    # Runs after restoration: that block replaces data["$namespaces"]
+    # wholesale, which would otherwise wipe out an "io" entry added here.
+    _ensure_default_base_namespace_declared(data)
 
     if "$graph" in data and isinstance(data["$graph"], list):
         for item in data["$graph"]:
