@@ -81,7 +81,13 @@ def _remove_step_refs(process: Process) -> None:
         if getattr(step, "run", None):
             step.run = step.run[step.run.rfind("#") :]
         if getattr(step, "scatter", None):
-            step.scatter = _clean_values(step.scatter, f"#{process.id}/")
+            # Two passes: scatter references can carry both the parent
+            # process prefix ("#process_id/...") and the step's own prefix
+            # ("step_id/...") - a single pass only strips the former,
+            # leaving "step_id/port" instead of "port". The second pass is
+            # a no-op (identity) when that extra prefix isn't present.
+            cleaned_scatter = _clean_values(step.scatter, f"#{process.id}/")
+            step.scatter = _clean_values(cleaned_scatter, f"{step.id}/")
 
 
 def _remove_process_refs(process: Process) -> None:
