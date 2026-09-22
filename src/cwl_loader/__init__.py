@@ -570,8 +570,9 @@ def _deduplicate_blank_named_nodes(data: dict) -> None:
     before hitting the same `RecursionError`).
 
     Walks *data* recursively and rewrites every later occurrence of a
-    `_:`-named dict to point at the *first* equal one, so `ruamel.yaml`
-    emits a shared anchor/alias instead of duplicating the text.
+    blank-named dict (its `name`'s last `/`-segment starts with `_:`) to
+    point at the *first* equal one, so `ruamel.yaml` emits a shared anchor/
+    alias instead of duplicating the text.
     """
     seen: dict[str, dict] = {}
 
@@ -580,7 +581,10 @@ def _deduplicate_blank_named_nodes(data: dict) -> None:
             for key, value in node.items():
                 node[key] = visit(value)
             name = node.get("name")
-            if isinstance(name, str) and name.startswith("_:"):
+            # The blank-node marker isn't always the whole name: cwl_utils
+            # also mints ids like "io:/#water-bodies/stac_items/_:<uuid>",
+            # where "_:<uuid>" is only the last '/'-separated segment.
+            if isinstance(name, str) and name.rsplit("/", 1)[-1].startswith("_:"):
                 existing = seen.get(name)
                 if existing is not None and existing == node:
                     return existing
