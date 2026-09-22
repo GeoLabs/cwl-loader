@@ -1,15 +1,104 @@
-# Simple utilities to load CWL documents in a transparent way
+# cwl-loader
 
-The **cwl_loader** Python library is a helper library to simplify the loading operations of CWL documents to [cwl-utils](https://github.com/common-workflow-language/cwl-utils) object models.
+[![PyPI - Version](https://img.shields.io/pypi/v/cwl-loader.svg)](https://pypi.org/project/cwl-loader)
+[![PyPI - Python Version](https://img.shields.io/pypi/pyversions/cwl-loader.svg)](https://pypi.org/project/cwl-loader)
 
-## Contribute
+`cwl-loader` provides utilities to load CWL documents (local files, URLs, streams, or strings) into [cwl-utils](https://github.com/common-workflow-language/cwl-utils) object models, normalize references, and sort dependency graphs.
 
-Submit a [Github issue](https://github.com/Terradue/cwl-loader/issues) if you have comments or suggestions.
+> [!IMPORTANT]
+> The `cwl-loader bundle` CLI has moved to
+> [Transpiler Mate](https://terradue.github.io/transpiler-mate/). This package
+> continues to provide the Python API for loading and serializing CWL documents.
+
+## Installation
+
+```bash
+pip install cwl-loader
+```
+
+## Quick Start
+
+Load a CWL document from a URL or local path:
+
+```python
+from cwl_loader import load_cwl_from_location
+
+process = load_cwl_from_location("workflow.cwl")
+```
+
+Load from in-memory text:
+
+```python
+from cwl_loader import load_cwl_from_string_content
+
+content = """
+cwlVersion: v1.2
+class: CommandLineTool
+id: example-tool
+baseCommand: echo
+inputs: []
+outputs: []
+"""
+
+process = load_cwl_from_string_content(content)
+```
+
+Dump back to YAML:
+
+```python
+from cwl_loader import dump_cwl
+
+with open("normalized.cwl", "w", encoding="utf-8") as out:
+    dump_cwl(process, out)
+```
+
+## Development
+
+Run tests:
+
+```bash
+task test
+```
+
+Or directly with Hatch:
+
+```bash
+hatch run test:test
+```
+
+Run code quality checks:
+
+```bash
+task check
+task lint
+```
 
 ## Documentation
 
-See the documentation at https://Terradue.github.io/cwl-loader/
+Project documentation is published at:
+https://Terradue.github.io/cwl-loader/
+
+## Contributing
+
+Issues and pull requests are welcome:
+https://github.com/eoap/cwl-loader/issues
+
+### Local quality checks
+
+Install [Hatch](https://hatch.pypa.io/) and [Taskfiles](https://taskfile.dev/docs/guide) then install the Git hook:
+
+```console
+task quality:pre-commit:install
+```
+
+Every commit runs Ruff (including the configured McCabe complexity limit),
+Ruff formatting, strict mypy checks, and the pytest suite.
+Run the complete hook explicitly with:
+
+```console
+task quality:pre-commit:run
+```
 
 ## License
 
-[![License: CC BY-SA 4.0](https://img.shields.io/badge/License-CC_BY--SA_4.0-lightgrey.svg)](https://creativecommons.org/licenses/by-sa/4.0/)
+[![Apache License, Version 2.0](https://img.shields.io/badge/license-Apache%20License%202.0-blue)](https://www.apache.org/licenses/LICENSE-2.0)

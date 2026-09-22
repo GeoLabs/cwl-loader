@@ -19,11 +19,10 @@ from cwl_utils.parser import Process
 from ruamel.yaml import YAML
 
 from cwl_loader import (
+    _custom_requirements_cache,
     dump_cwl_with_custom_requirements,
     extract_dask_config,
     load_cwl_from_string_content,
-    _custom_requirements_cache,
-    _original_namespaces,
 )
 
 _yaml = YAML()
@@ -198,9 +197,4 @@ class TestCustomRequirements(TestCase):
             {},
             dict(_custom_requirements_cache),
             "Cache must be empty after loading a doc without custom reqs",
-        )
-        self.assertEqual(
-            {},
-            dict(_original_namespaces),
-            "Namespace store must be empty after loading a doc without $namespaces",
         )
