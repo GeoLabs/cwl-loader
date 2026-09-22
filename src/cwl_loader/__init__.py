@@ -27,6 +27,7 @@ from ruamel.yaml.comments import CommentedMap
 from typing import Any, List, Mapping, Optional, TextIO, Tuple
 from urllib.parse import urlparse, urldefrag
 import copy
+import json
 import requests
 import os
 
@@ -477,6 +478,154 @@ def load_cwl_from_string_content(
     )
 
 
+def _schema_def_urls(req: Mapping[str, Any]) -> frozenset:
+    """
+    Returns the set of external schema URLs a `SchemaDefRequirement`
+    covers, whether its `types` entries are still lazy `$import` dicts or
+    already resolved (fully inlined) type records.
+    """
+    urls = set()
+    for type_ in req.get("types", []) or []:
+        if not isinstance(type_, dict):
+            continue
+        if "$import" in type_:
+            urls.add(type_["$import"])
+        elif isinstance(type_.get("name"), str):
+            urls.add(type_["name"].split("#", 1)[0])
+    return frozenset(urls)
+
+
+def _is_resolved_schema_def(req: Mapping[str, Any]) -> bool:
+    """True if every type in *req* is fully inlined (no lazy `$import`)."""
+    types = req.get("types", []) or []
+    return bool(types) and all(
+        isinstance(type_, dict) and "$import" not in type_ for type_ in types
+    )
+
+
+def _deduplicate_schema_def_requirements(data: dict) -> None:
+    """
+    `cwl_utils.parser.save()` serializes each Process's `requirements`
+    independently, so when several processes of the same `$graph` import
+    the same external schema (e.g. `eoap_cwlwrap` building its own
+    `SchemaDefRequirement` for a type already resolved elsewhere from
+    loading the source CWL), the dumped YAML ends up with the schema's
+    type definitions duplicated once per process. cwltool's schema-salad
+    loader registers external type names once per document; re-registering
+    the same names a second time makes its type-equivalence checker
+    recurse pathologically on non-trivial schemas (observed: RecursionError
+    / multi-minute hang), even though the duplicate declarations are
+    otherwise valid CWL.
+
+    This normalizes every `SchemaDefRequirement` in *data*'s `$graph` (or
+    the single top-level process) so that requirements covering the same
+    set of schema URLs share the *same* dict object - preferring an
+    already-resolved copy over a lazy `$import` one. `ruamel.yaml` then
+    naturally emits a YAML anchor/alias for the shared object instead of
+    duplicating its text, and cwltool loads the result once, cleanly.
+    """
+    items = data.get("$graph") if isinstance(data.get("$graph"), list) else [data]
+
+    occurrences: dict[frozenset, list] = {}
+    all_reqs: dict[frozenset, list] = {}
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        requirements = item.get("requirements")
+        if not isinstance(requirements, list):
+            continue
+        for idx, req in enumerate(requirements):
+            if not isinstance(req, dict) or req.get("class") != "SchemaDefRequirement":
+                continue
+            urls = _schema_def_urls(req)
+            if not urls:
+                continue
+            occurrences.setdefault(urls, []).append((requirements, idx))
+            all_reqs.setdefault(urls, []).append(req)
+
+    for urls, reqs in all_reqs.items():
+        if len(reqs) < 2:
+            continue
+        # Prefer a fully resolved copy as the shared object: cwltool needs
+        # the concrete types, not just a reference to re-resolve.
+        canonical = next((r for r in reqs if _is_resolved_schema_def(r)), reqs[0])
+        for requirements, idx in occurrences[urls]:
+            requirements[idx] = canonical
+
+
+def _deduplicate_blank_named_nodes(data: dict) -> None:
+    """
+    `cwl_utils.parser.save()` gives anonymous/synthesized nodes (e.g. an
+    inline `array`/`record` type used as an input's `type`) a content-derived
+    blank-node `name` such as `_:<uuid>`. When the *same* anonymous type is
+    independently serialized from more than one process of the same
+    `$graph` (e.g. an orchestrator input and the wrapped process' matching
+    input), each occurrence gets its own dict with an *equal* `name` but no
+    shared identity - the same duplicate-registration issue
+    `_deduplicate_schema_def_requirements` fixes for `SchemaDefRequirement`,
+    just for these blank-named subtrees instead. Left alone, cwltool
+    re-registers the name for every occurrence, which - like the
+    `SchemaDefRequirement` case - makes its type-equivalence checker recurse
+    pathologically (observed: thousands of "previously defined" warnings
+    before hitting the same `RecursionError`).
+
+    Walks *data* recursively and rewrites every later occurrence of a
+    blank-named dict (its `name`'s last `/`-segment starts with `_:`) to
+    point at the *first* equal one, so `ruamel.yaml` emits a shared anchor/
+    alias instead of duplicating the text.
+    """
+    seen: dict[str, dict] = {}
+
+    def visit(node: Any) -> Any:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                node[key] = visit(value)
+            name = node.get("name")
+            # The blank-node marker isn't always the whole name: cwl_utils
+            # also mints ids like "io:/#water-bodies/stac_items/_:<uuid>",
+            # where "_:<uuid>" is only the last '/'-separated segment.
+            if isinstance(name, str) and name.rsplit("/", 1)[-1].startswith("_:"):
+                existing = seen.get(name)
+                if existing is not None and existing == node:
+                    return existing
+                seen.setdefault(name, node)
+            return node
+        if isinstance(node, list):
+            for idx, value in enumerate(node):
+                node[idx] = visit(value)
+            return node
+        return node
+
+    visit(data)
+
+
+def _ensure_default_base_namespace_declared(data: dict) -> None:
+    """
+    Processes loaded via `load_cwl_from_yaml`/`load_cwl_from_location`/etc.
+    without an explicit `uri=` default to `__DEFAULT_BASE_URI__` ("io://")
+    as their base. Any anonymous/synthesized id schema-salad mints while
+    parsing that document inherits it - observed as either "io://#..." or,
+    for ids built by joining a relative path onto the empty-authority base
+    (e.g. a nested step/port path), the single-slash "io:/#water-bodies/
+    stac_items/_:<uuid>" form. Either way, nothing in the dumped output
+    ever *declares* what the `io` prefix means, so cwltool warns "URI
+    prefix 'io' ... not recognized, are you missing a $namespaces
+    section?" on every such id when later loading the dumped document.
+
+    Declares it once in *data*'s `$namespaces`, matching whichever exact
+    form was found, unless something already assigns `io` to a different
+    value (a document's own, unrelated `io` namespace is left untouched
+    rather than risk clobbering it).
+    """
+    text = json.dumps(data)
+    for candidate in (__DEFAULT_BASE_URI__, "io:/"):
+        if candidate in text:
+            namespaces = data.setdefault("$namespaces", {})
+            namespaces.setdefault("io", candidate)
+            return
+
+
 def dump_cwl(process: Process | List[Process], stream: TextIO):
     """
     Serializes a CWL document to its YAML representation.
@@ -492,6 +641,10 @@ def dump_cwl(process: Process | List[Process], stream: TextIO):
         val=process,  # type: ignore
         relative_uris=False,
     )
+
+    _deduplicate_schema_def_requirements(data)
+    _deduplicate_blank_named_nodes(data)
+    _ensure_default_base_namespace_declared(data)
 
     _yaml.dump(data=data, stream=stream)
 
@@ -557,9 +710,16 @@ def dump_cwl_with_custom_requirements(
         relative_uris=False,
     )
 
+    _deduplicate_schema_def_requirements(data)
+    _deduplicate_blank_named_nodes(data)
+
     if "__root__" in original_namespaces:
         data["$namespaces"] = original_namespaces["__root__"]
         logger.debug(f"Restored original $namespaces: {data['$namespaces']}")
+
+    # Runs after restoration: that block replaces data["$namespaces"]
+    # wholesale, which would otherwise wipe out an "io" entry added here.
+    _ensure_default_base_namespace_declared(data)
 
     if "$graph" in data and isinstance(data["$graph"], list):
         for item in data["$graph"]:
